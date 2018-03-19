@@ -22,7 +22,7 @@ int main()
 	if (h != INVALID_HANDLE_VALUE)
 	{
 		// Write
-		MEMORY_WRITE_PARAM memoryWriteParam;
+		static MEMORY_WRITE_PARAM memoryWriteParam;
 		DWORD bytesIO;
 		
 		memoryWriteParam.ProcessId = GetCurrentProcessId();
@@ -44,7 +44,7 @@ int main()
 		std::printf("MEMORY_WRITE_REQUEST\n");
 
 		// Read
-		MEMORY_READ_PARAM memoryReadParam;
+		static MEMORY_READ_PARAM memoryReadParam;
 		memoryReadParam.ProcessId = GetCurrentProcessId();
 		memoryReadParam.Address = (DWORD64)&x;
 		memoryReadParam.Size = sizeof(value);

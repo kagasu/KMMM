@@ -4,7 +4,7 @@
 typedef struct _MEMORY_READ_PARAM {
 	DWORD ProcessId;
 	DWORD64 Address;
-	BYTE Value[1024];
+	BYTE Value[10485760]; // 10MiB
 	DWORD Size;
 } MEMORY_READ_PARAM, *PMEMORY_READ_PARAM;
 
@@ -12,6 +12,6 @@ typedef struct _MEMORY_READ_PARAM {
 typedef struct _MEMORY_WRITE_PARAM {
 	DWORD ProcessId;
 	DWORD64 Address;
-	BYTE Value[1024];
+	BYTE Value[10485760]; // 10MiB
 	DWORD Size;
 } MEMORY_WRITE_PARAM, *PMEMORY_WRITE_PARAM;
