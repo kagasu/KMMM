@@ -3,9 +3,9 @@
 #include <stdlib.h>
 #include "IoControlCodes.h"
 
-#define DEVICE_NAME L"\\Device\\KMMM079"
-#define SYMBOLIC_LINK_NAME L"\\DosDevices\\KMMM079"
-#define DRIVER_NAME L"\\Driver\\KMMM079"
+#define DEVICE_NAME L"\\Device\\KMMM"
+#define SYMBOLIC_LINK_NAME L"\\DosDevices\\KMMM"
+#define DRIVER_NAME L"\\Driver\\KMMM"
 
 NTKERNELAPI NTSTATUS IoCreateDriver(
 	IN PUNICODE_STRING DriverName, OPTIONAL
