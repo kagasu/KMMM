@@ -33,9 +33,7 @@ NTSTATUS KeReadProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID Targe
 	PEPROCESS TargetProcess = PsGetCurrentProcess();
 	SIZE_T Result;
 
-	MmCopyVirtualMemory(SourceProcess, SourceAddress, TargetProcess, TargetAddress, Size, KernelMode, &Result);
-
-	return STATUS_SUCCESS;
+	return NT_SUCCESS(MmCopyVirtualMemory(SourceProcess, SourceAddress, TargetProcess, TargetAddress, Size, KernelMode, &Result));
 }
 
 NTSTATUS KeWriteProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size)
@@ -52,85 +50,33 @@ NTSTATUS DevioctlDispatch(
 	_Inout_ struct _IRP *Irp
 )
 {
-	NTSTATUS				status = STATUS_SUCCESS;
-	ULONG					bytesIO = 0;
-	PIO_STACK_LOCATION		stack;
-	BOOLEAN					condition = FALSE;
-	PMEMORY_READ_PARAM		memoryReadParam;
-	PMEMORY_WRITE_PARAM		memoryWriteParam;
-	PEPROCESS				process;
+	ULONG bytesIO = 0;
+	PEPROCESS process;
 
 	UNREFERENCED_PARAMETER(DeviceObject);
+	PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
 
+	if(stack->Parameters.DeviceIoControl.IoControlCode == MEMORY_READ_REQUEST)
+	{
+		//DbgPrint("[KMMM]MEMORY_READ_REQUEST");
+		PMEMORY_READ_PARAM memoryReadParam = (PMEMORY_READ_PARAM)Irp->AssociatedIrp.SystemBuffer;
+		PsLookupProcessByProcessId((HANDLE)memoryReadParam->ProcessId, &process);
+		KeReadProcessMemory(process, (PVOID)memoryReadParam->Address, memoryReadParam->Value, memoryReadParam->Size);
+		bytesIO = sizeof(MEMORY_READ_PARAM);
+	}
+	else if (stack->Parameters.DeviceIoControl.IoControlCode == MEMORY_WRITE_REQUEST)
+	{
+		//DbgPrint("[KMMM]MEMORY_WRITE_REQUEST");
+		PMEMORY_WRITE_PARAM memoryWriteParam = (PMEMORY_WRITE_PARAM)Irp->AssociatedIrp.SystemBuffer;
+		PsLookupProcessByProcessId((HANDLE)memoryWriteParam->ProcessId, &process);
+		KeWriteProcessMemory(process, memoryWriteParam->Value, (PVOID)memoryWriteParam->Address, memoryWriteParam->Size);
+		bytesIO = 0;
+	};
 
-	stack = IoGetCurrentIrpStackLocation(Irp);
-
-	do {
-
-		if (stack == NULL) {
-			status = STATUS_INTERNAL_ERROR;
-			break;
-		}
-
-		
-		if (Irp->AssociatedIrp.SystemBuffer == NULL) {
-			status = STATUS_INVALID_PARAMETER;
-			break;
-		}
-
-		switch (stack->Parameters.DeviceIoControl.IoControlCode) {
-		case MEMORY_READ_REQUEST:
-			//DbgPrint("[KMMM]MEMORY_READ_REQUEST");
-			memoryReadParam = (PMEMORY_READ_PARAM)Irp->AssociatedIrp.SystemBuffer;
-
-			if (stack->Parameters.DeviceIoControl.InputBufferLength != sizeof(MEMORY_READ_PARAM)) {
-				status = STATUS_INVALID_PARAMETER;
-				break;
-			}
-
-			PsLookupProcessByProcessId((HANDLE)memoryReadParam->ProcessId, &process);
-			KeReadProcessMemory(process, (PVOID)memoryReadParam->Address, memoryReadParam->Value, memoryReadParam->Size);
-			
-			status = STATUS_SUCCESS;
-			bytesIO = sizeof(MEMORY_READ_PARAM);
-			break;
-
-		case MEMORY_WRITE_REQUEST:
-			//DbgPrint("[KMMM]MEMORY_WRITE_REQUEST");
-			memoryWriteParam = (PMEMORY_WRITE_PARAM)Irp->AssociatedIrp.SystemBuffer;
-
-			if (stack->Parameters.DeviceIoControl.InputBufferLength != sizeof(MEMORY_WRITE_PARAM)) {
-				status = STATUS_INVALID_PARAMETER;
-				break;
-			}
-
-			PsLookupProcessByProcessId((HANDLE)memoryWriteParam->ProcessId, &process);
-			KeWriteProcessMemory(process, memoryWriteParam->Value, (PVOID)memoryWriteParam->Address, memoryWriteParam->Size);
-			bytesIO = sizeof(MEMORY_WRITE_PARAM);
-			break;
-
-		default:
-			status = STATUS_INVALID_PARAMETER;
-		};
-
-	} while (condition);
-
-	Irp->IoStatus.Status = status;
+	Irp->IoStatus.Status = STATUS_SUCCESS;
 	Irp->IoStatus.Information = bytesIO;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
-	return status;
-}
-
-NTSTATUS UnsupportedDispatch(
-	_In_ struct _DEVICE_OBJECT *DeviceObject,
-	_Inout_ struct _IRP *Irp
-)
-{
-	UNREFERENCED_PARAMETER(DeviceObject);
-
-	Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-	IoCompleteRequest(Irp, IO_NO_INCREMENT);
-	return Irp->IoStatus.Status;
+	return STATUS_SUCCESS;
 }
 
 NTSTATUS CreateDispatch(
@@ -172,11 +118,6 @@ NTSTATUS DriverInitialize(
 	IoCreateSymbolicLink(&SymLink, &DevName);
 	
 	devobj->Flags |= DO_BUFFERED_IO;
-
-	for (ULONG t = 0; t <= IRP_MJ_MAXIMUM_FUNCTION; t++)
-	{
-		DriverObject->MajorFunction[t] = &UnsupportedDispatch;
-	}
 
 	DriverObject->MajorFunction[IRP_MJ_CREATE] = &CreateDispatch;
 	DriverObject->MajorFunction[IRP_MJ_CLOSE] = &CloseDispatch;
