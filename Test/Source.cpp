@@ -21,9 +21,27 @@ int main()
 	HANDLE h = CreateFile(TEXT("\\\\.\\KMMM"), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
 	if (h != INVALID_HANDLE_VALUE)
 	{
+		// GetProcessBaseAddress
+		DWORD bytesIO;
+		static GET_PROCESS_BASE_ADDRESS_PARAM getProcessBaseAddressParam;
+		getProcessBaseAddressParam.ProcessId = GetCurrentProcessId();
+		getProcessBaseAddressParam.BaseAddress = 0;
+
+		DeviceIoControl(
+			h,
+			GET_PROCESS_BASE_ADDRESS_REQUEST,
+			&getProcessBaseAddressParam,
+			sizeof(getProcessBaseAddressParam),
+			&getProcessBaseAddressParam,
+			sizeof(getProcessBaseAddressParam),
+			&bytesIO,
+			NULL);
+		std::printf("GET_PROCESS_BASE_ADDRESS_REQUEST\n");
+
+		std::printf("value %llx\n", getProcessBaseAddressParam.BaseAddress);
+
 		// Write
 		static MEMORY_WRITE_PARAM memoryWriteParam;
-		DWORD bytesIO;
 		
 		memoryWriteParam.ProcessId = GetCurrentProcessId();
 		memoryWriteParam.Address = (DWORD64)&x;

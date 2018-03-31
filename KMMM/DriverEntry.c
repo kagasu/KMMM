@@ -17,6 +17,10 @@ NTKERNELAPI NTSTATUS PsLookupProcessByProcessId(
 	_Outptr_ PEPROCESS *Process
 );
 
+NTKERNELAPI PVOID PsGetProcessSectionBaseAddress(
+	__in PEPROCESS Process
+);
+
 NTSTATUS NTAPI MmCopyVirtualMemory(
 	PEPROCESS SourceProcess,
 	PVOID SourceAddress,
@@ -56,7 +60,15 @@ NTSTATUS DevioctlDispatch(
 	UNREFERENCED_PARAMETER(DeviceObject);
 	PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
 
-	if(stack->Parameters.DeviceIoControl.IoControlCode == MEMORY_READ_REQUEST)
+	if (stack->Parameters.DeviceIoControl.IoControlCode == GET_PROCESS_BASE_ADDRESS_REQUEST)
+	{
+		//DbgPrint("[KMMM]GET_PROCESS_BASE_ADDRESS_PARAM");
+		PGET_PROCESS_BASE_ADDRESS_PARAM getProcessBaseAddressParam = (PGET_PROCESS_BASE_ADDRESS_PARAM)Irp->AssociatedIrp.SystemBuffer;
+		PsLookupProcessByProcessId((HANDLE)getProcessBaseAddressParam->ProcessId, &process);
+		getProcessBaseAddressParam->BaseAddress = (DWORD64)PsGetProcessSectionBaseAddress(process);
+		bytesIO = sizeof(GET_PROCESS_BASE_ADDRESS_PARAM);
+	}
+	else if(stack->Parameters.DeviceIoControl.IoControlCode == MEMORY_READ_REQUEST)
 	{
 		//DbgPrint("[KMMM]MEMORY_READ_REQUEST");
 		PMEMORY_READ_PARAM memoryReadParam = (PMEMORY_READ_PARAM)Irp->AssociatedIrp.SystemBuffer;
