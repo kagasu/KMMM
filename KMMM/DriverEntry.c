@@ -30,33 +30,21 @@ NTSTATUS KeReadProcessMemory(PREAD_MEMORY_PARAM Param)
 	NTSTATUS NtStatus = STATUS_SUCCESS;
 	PVOID DriverBuffer = ExAllocatePoolWithTag(NonPagedPool, Param->Size, 'sys');
 
-	__try
+	// read memory (target -> kernel)
+	KeStackAttachProcess(TargetProcess, &KapcState);
+	if (MmIsAddressValid((PVOID)Param->TargetBufferAddress))
 	{
-		// read memory (target -> kernel)
-		KeStackAttachProcess(TargetProcess, &KapcState);
-		ProbeForRead((CONST PVOID)Param->TargetBufferAddress, Param->Size, sizeof(CHAR));
 		RtlCopyMemory(DriverBuffer, (PVOID)Param->TargetBufferAddress, Param->Size);
-		KeUnstackDetachProcess(&KapcState);
 	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
-	{
-		KeUnstackDetachProcess(&KapcState);
-		NtStatus = STATUS_ABANDONED;
-	}
-	__try
-	{
-		// transfer buffer (kernel -> client)
-		KeStackAttachProcess(ClientProcess, &KapcState);
-		ProbeForRead((CONST PVOID)Param->ClientBufferAddress, Param->Size, sizeof(CHAR));
-		RtlCopyMemory((PVOID)Param->ClientBufferAddress, DriverBuffer, Param->Size);
-		KeUnstackDetachProcess(&KapcState);
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
-	{
-		KeUnstackDetachProcess(&KapcState);
-		NtStatus = STATUS_ABANDONED;
-	}
+	KeUnstackDetachProcess(&KapcState);
 
+	// transfer buffer (kernel -> client)
+	KeStackAttachProcess(ClientProcess, &KapcState);
+	if (MmIsAddressValid((PVOID)Param->ClientBufferAddress))
+	{
+		RtlCopyMemory((PVOID)Param->ClientBufferAddress, DriverBuffer, Param->Size);
+	}
+	KeUnstackDetachProcess(&KapcState);
 	ExFreePool(DriverBuffer);
 	return NtStatus;
 }
@@ -67,32 +55,21 @@ NTSTATUS KeWriteProcessMemory(PWRITE_MEMORY_PARAM Param)
 	NTSTATUS NtStatus = STATUS_SUCCESS;
 	PVOID DriverBuffer = ExAllocatePoolWithTag(NonPagedPool, Param->Size, 'sys');
 
-	__try
+	// read memory (client -> kernel)
+	KeStackAttachProcess(ClientProcess, &KapcState);
+	if (MmIsAddressValid((PVOID)Param->ClientBufferAddress))
 	{
-		// read memory (client -> kernel)
-		KeStackAttachProcess(ClientProcess, &KapcState);
-		ProbeForRead((CONST PVOID)Param->ClientBufferAddress, Param->Size, sizeof(CHAR));
 		RtlCopyMemory(DriverBuffer, (PVOID)Param->ClientBufferAddress, Param->Size);
-		KeUnstackDetachProcess(&KapcState);
 	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
+	KeUnstackDetachProcess(&KapcState);
+
+	// transfer buffer (kernel -> target)
+	KeStackAttachProcess(TargetProcess, &KapcState);
+	if (MmIsAddressValid((PVOID)Param->TargetBufferAddress))
 	{
-		KeUnstackDetachProcess(&KapcState);
-		NtStatus = STATUS_ABANDONED;
-	}
-	__try
-	{
-		// transfer buffer (kernel -> target)
-		KeStackAttachProcess(TargetProcess, &KapcState);
-		ProbeForRead((CONST PVOID)Param->TargetBufferAddress, Param->Size, sizeof(CHAR));
 		RtlCopyMemory((PVOID)Param->TargetBufferAddress, DriverBuffer, Param->Size);
-		KeUnstackDetachProcess(&KapcState);
 	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
-	{
-		KeUnstackDetachProcess(&KapcState);
-		NtStatus = STATUS_ABANDONED;
-	}
+	KeUnstackDetachProcess(&KapcState);
 
 	ExFreePool(DriverBuffer);
 	return NtStatus;
