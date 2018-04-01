@@ -1,4 +1,5 @@
-#include <ntddk.h>
+#include <ntdef.h>
+#include <ntifs.h>
 #include <minwindef.h>
 #include <stdlib.h>
 #include "IoControlCodes.h"
@@ -8,85 +9,130 @@
 #define DRIVER_NAME L"\\Driver\\KMMM"
 
 NTKERNELAPI NTSTATUS IoCreateDriver(
-	IN PUNICODE_STRING DriverName, OPTIONAL
-	IN PDRIVER_INITIALIZE InitializationFunction
+	_In_		PUNICODE_STRING DriverName, OPTIONAL
+	_In_		PDRIVER_INITIALIZE InitializationFunction
 );
 
 NTKERNELAPI NTSTATUS PsLookupProcessByProcessId(
-	_In_ HANDLE ProcessId,
-	_Outptr_ PEPROCESS *Process
+	_In_		HANDLE ProcessId,
+	_Outptr_	PEPROCESS *Process
 );
 
 NTKERNELAPI PVOID PsGetProcessSectionBaseAddress(
-	__in PEPROCESS Process
+	_In_		PEPROCESS Process
 );
 
-NTSTATUS NTAPI MmCopyVirtualMemory(
-	PEPROCESS SourceProcess,
-	PVOID SourceAddress,
-	PEPROCESS TargetProcess,
-	PVOID TargetAddress,
-	SIZE_T BufferSize,
-	KPROCESSOR_MODE PreviousMode,
-	PSIZE_T ReturnSize
-);
+PEPROCESS ClientProcess, TargetProcess;
 
-NTSTATUS KeReadProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size)
+NTSTATUS KeReadProcessMemory(PREAD_MEMORY_PARAM Param)
 {
-	PEPROCESS SourceProcess = Process;
-	PEPROCESS TargetProcess = PsGetCurrentProcess();
-	SIZE_T Result;
+	KAPC_STATE KapcState;
+	NTSTATUS NtStatus = STATUS_SUCCESS;
+	PVOID DriverBuffer = ExAllocatePoolWithTag(NonPagedPool, Param->Size, 'sys');
 
-	return NT_SUCCESS(MmCopyVirtualMemory(SourceProcess, SourceAddress, TargetProcess, TargetAddress, Size, KernelMode, &Result));
+	__try
+	{
+		// read memory (target -> kernel)
+		KeStackAttachProcess(TargetProcess, &KapcState);
+		ProbeForRead((CONST PVOID)Param->TargetBufferAddress, Param->Size, sizeof(CHAR));
+		RtlCopyMemory(DriverBuffer, (PVOID)Param->TargetBufferAddress, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		KeUnstackDetachProcess(&KapcState);
+		NtStatus = STATUS_ABANDONED;
+	}
+	__try
+	{
+		// transfer buffer (kernel -> client)
+		KeStackAttachProcess(ClientProcess, &KapcState);
+		ProbeForRead((CONST PVOID)Param->ClientBufferAddress, Param->Size, sizeof(CHAR));
+		RtlCopyMemory((PVOID)Param->ClientBufferAddress, DriverBuffer, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		KeUnstackDetachProcess(&KapcState);
+		NtStatus = STATUS_ABANDONED;
+	}
+
+	ExFreePool(DriverBuffer);
+	return NtStatus;
 }
 
-NTSTATUS KeWriteProcessMemory(PEPROCESS Process, PVOID SourceAddress, PVOID TargetAddress, SIZE_T Size)
+NTSTATUS KeWriteProcessMemory(PWRITE_MEMORY_PARAM Param)
 {
-	PEPROCESS SourceProcess = PsGetCurrentProcess();
-	PEPROCESS TargetProcess = Process;
-	SIZE_T Result;
+	KAPC_STATE KapcState;
+	NTSTATUS NtStatus = STATUS_SUCCESS;
+	PVOID DriverBuffer = ExAllocatePoolWithTag(NonPagedPool, Param->Size, 'sys');
 
-	return NT_SUCCESS(MmCopyVirtualMemory(SourceProcess, SourceAddress, TargetProcess, TargetAddress, Size, KernelMode, &Result));
+	__try
+	{
+		// read memory (client -> kernel)
+		KeStackAttachProcess(ClientProcess, &KapcState);
+		ProbeForRead((CONST PVOID)Param->ClientBufferAddress, Param->Size, sizeof(CHAR));
+		RtlCopyMemory(DriverBuffer, (PVOID)Param->ClientBufferAddress, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		KeUnstackDetachProcess(&KapcState);
+		NtStatus = STATUS_ABANDONED;
+	}
+	__try
+	{
+		// transfer buffer (kernel -> target)
+		KeStackAttachProcess(TargetProcess, &KapcState);
+		ProbeForRead((CONST PVOID)Param->TargetBufferAddress, Param->Size, sizeof(CHAR));
+		RtlCopyMemory((PVOID)Param->TargetBufferAddress, DriverBuffer, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		KeUnstackDetachProcess(&KapcState);
+		NtStatus = STATUS_ABANDONED;
+	}
+
+	ExFreePool(DriverBuffer);
+	return NtStatus;
 }
 
 NTSTATUS DevioctlDispatch(
-	_In_ struct _DEVICE_OBJECT *DeviceObject,
-	_Inout_ struct _IRP *Irp
+	_In_	struct _DEVICE_OBJECT *DeviceObject,
+	_Inout_	struct _IRP *Irp
 )
 {
-	ULONG bytesIO = 0;
-	PEPROCESS process;
-
+	ULONG IoSize = 0;
 	UNREFERENCED_PARAMETER(DeviceObject);
 	PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
 
-	if (stack->Parameters.DeviceIoControl.IoControlCode == GET_PROCESS_BASE_ADDRESS_REQUEST)
+	if (stack->Parameters.DeviceIoControl.IoControlCode == INITIALIZE_DRIVER_REQUEST)
 	{
-		//DbgPrint("[KMMM]GET_PROCESS_BASE_ADDRESS_PARAM");
-		PGET_PROCESS_BASE_ADDRESS_PARAM getProcessBaseAddressParam = (PGET_PROCESS_BASE_ADDRESS_PARAM)Irp->AssociatedIrp.SystemBuffer;
-		PsLookupProcessByProcessId((HANDLE)getProcessBaseAddressParam->ProcessId, &process);
-		getProcessBaseAddressParam->BaseAddress = (DWORD64)PsGetProcessSectionBaseAddress(process);
-		bytesIO = sizeof(GET_PROCESS_BASE_ADDRESS_PARAM);
+		//DbgPrint("[KMMM]INITIALIZE_DRIVER_REQUEST");
+		PINITIALIZE_DRIVER_PARAM InitializeDriverParam = (PINITIALIZE_DRIVER_PARAM)Irp->AssociatedIrp.SystemBuffer;
+		PsLookupProcessByProcessId((HANDLE)InitializeDriverParam->ClientProcessId, &ClientProcess);
+		PsLookupProcessByProcessId((HANDLE)InitializeDriverParam->TargetProcessId, &TargetProcess);
+		InitializeDriverParam->TargetProcessBaseAddress = (DWORD64)PsGetProcessSectionBaseAddress(TargetProcess);
+		IoSize = sizeof(INITIALIZE_DRIVER_PARAM);
 	}
-	else if(stack->Parameters.DeviceIoControl.IoControlCode == MEMORY_READ_REQUEST)
+	else if(stack->Parameters.DeviceIoControl.IoControlCode == READ_MEMORY_REQUEST)
 	{
 		//DbgPrint("[KMMM]MEMORY_READ_REQUEST");
-		PMEMORY_READ_PARAM memoryReadParam = (PMEMORY_READ_PARAM)Irp->AssociatedIrp.SystemBuffer;
-		PsLookupProcessByProcessId((HANDLE)memoryReadParam->ProcessId, &process);
-		KeReadProcessMemory(process, (PVOID)memoryReadParam->Address, memoryReadParam->Value, memoryReadParam->Size);
-		bytesIO = sizeof(MEMORY_READ_PARAM);
+		PREAD_MEMORY_PARAM ReadMemoryParam = (PREAD_MEMORY_PARAM)Irp->AssociatedIrp.SystemBuffer;
+		KeReadProcessMemory(ReadMemoryParam);
+		IoSize = 0;
 	}
-	else if (stack->Parameters.DeviceIoControl.IoControlCode == MEMORY_WRITE_REQUEST)
+	else if (stack->Parameters.DeviceIoControl.IoControlCode == WRITE_MEMORY_REQUEST)
 	{
 		//DbgPrint("[KMMM]MEMORY_WRITE_REQUEST");
-		PMEMORY_WRITE_PARAM memoryWriteParam = (PMEMORY_WRITE_PARAM)Irp->AssociatedIrp.SystemBuffer;
-		PsLookupProcessByProcessId((HANDLE)memoryWriteParam->ProcessId, &process);
-		KeWriteProcessMemory(process, memoryWriteParam->Value, (PVOID)memoryWriteParam->Address, memoryWriteParam->Size);
-		bytesIO = 0;
+		PWRITE_MEMORY_PARAM WriteMemoryParam = (PWRITE_MEMORY_PARAM)Irp->AssociatedIrp.SystemBuffer;
+		KeWriteProcessMemory(WriteMemoryParam);
+		IoSize = 0;
 	};
 
 	Irp->IoStatus.Status = STATUS_SUCCESS;
-	Irp->IoStatus.Information = bytesIO;
+	Irp->IoStatus.Information = IoSize;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
 	return STATUS_SUCCESS;
 }

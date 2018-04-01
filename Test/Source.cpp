@@ -21,65 +21,64 @@ int main()
 	HANDLE h = CreateFile(TEXT("\\\\.\\KMMM"), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
 	if (h != INVALID_HANDLE_VALUE)
 	{
-		// GetProcessBaseAddress
-		DWORD bytesIO;
-		static GET_PROCESS_BASE_ADDRESS_PARAM getProcessBaseAddressParam;
-		getProcessBaseAddressParam.ProcessId = GetCurrentProcessId();
-		getProcessBaseAddressParam.BaseAddress = 0;
+		DWORD IoSize;
+
+		// Initialize Driver
+		INITIALIZE_DRIVER_PARAM initializeDriverParam;
+		initializeDriverParam.ClientProcessId = GetCurrentProcessId();
+		initializeDriverParam.TargetProcessId = GetCurrentProcessId();
 
 		DeviceIoControl(
 			h,
-			GET_PROCESS_BASE_ADDRESS_REQUEST,
-			&getProcessBaseAddressParam,
-			sizeof(getProcessBaseAddressParam),
-			&getProcessBaseAddressParam,
-			sizeof(getProcessBaseAddressParam),
-			&bytesIO,
+			INITIALIZE_DRIVER_REQUEST,
+			&initializeDriverParam,
+			sizeof(initializeDriverParam),
+			&initializeDriverParam,
+			sizeof(initializeDriverParam),
+			&IoSize,
 			NULL);
-		std::printf("GET_PROCESS_BASE_ADDRESS_REQUEST\n");
+		std::printf("INITIALIZE_DRIVER_REQUEST\n");
 
-		std::printf("value %llx\n", getProcessBaseAddressParam.BaseAddress);
+		auto baseAddress = initializeDriverParam.TargetProcessBaseAddress;
+		std::printf("base address = %llX\n", baseAddress);
 
-		// Write
-		static MEMORY_WRITE_PARAM memoryWriteParam;
-		
-		memoryWriteParam.ProcessId = GetCurrentProcessId();
-		memoryWriteParam.Address = (DWORD64)&x;
-		
-		DWORD64 value = 99999999999;
-		memcpy(memoryWriteParam.Value, &value, sizeof(value));
-		memoryWriteParam.Size = sizeof(value);
+		DWORD64 value = 0;
+
+		// Read Memory
+		READ_MEMORY_PARAM readMemoryParam;
+		readMemoryParam.ClientBufferAddress = (DWORD64)&value;
+		readMemoryParam.TargetBufferAddress = (DWORD64)&x;
+		readMemoryParam.Size = sizeof(value);
 
 		DeviceIoControl(
 			h,
-			MEMORY_WRITE_REQUEST,
-			&memoryWriteParam,
-			sizeof(memoryWriteParam),
-			&memoryWriteParam,
-			sizeof(memoryWriteParam),
-			&bytesIO,
+			READ_MEMORY_REQUEST,
+			&readMemoryParam,
+			sizeof(readMemoryParam),
+			nullptr,
+			0,
+			&IoSize,
 			NULL);
-		std::printf("MEMORY_WRITE_REQUEST\n");
-
-		// Read
-		static MEMORY_READ_PARAM memoryReadParam;
-		memoryReadParam.ProcessId = GetCurrentProcessId();
-		memoryReadParam.Address = (DWORD64)&x;
-		memoryReadParam.Size = sizeof(value);
-
-		DeviceIoControl(
-			h,
-			MEMORY_READ_REQUEST,
-			&memoryReadParam,
-			sizeof(memoryReadParam),
-			&memoryReadParam,
-			sizeof(memoryReadParam),
-			&bytesIO,
-			NULL);
-		std::printf("MEMORY_READ_REQUEST\n");
-
-		memcpy(&value, memoryReadParam.Value, sizeof(value));
+		std::printf("READ_MEMORY_REQUEST\n");
 		std::printf("value %lld\n", value);
+
+		// Write Memory
+		value = 99999999999;
+		WRITE_MEMORY_PARAM writeMemoryParam;
+		writeMemoryParam.ClientBufferAddress = (DWORD64)&value;
+		writeMemoryParam.TargetBufferAddress = (DWORD64)&x;
+		writeMemoryParam.Size = sizeof(value);
+
+		DeviceIoControl(
+			h,
+			WRITE_MEMORY_REQUEST,
+			&writeMemoryParam,
+			sizeof(writeMemoryParam),
+			nullptr,
+			0,
+			&IoSize,
+			NULL);
+		std::printf("WRITE_MEMORY_REQUEST\n");
 
 		CloseHandle(h);
 	}
