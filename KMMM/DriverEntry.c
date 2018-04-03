@@ -6,7 +6,6 @@
 
 #define DEVICE_NAME L"\\Device\\KMMM"
 #define SYMBOLIC_LINK_NAME L"\\DosDevices\\KMMM"
-#define DRIVER_NAME L"\\Driver\\KMMM"
 
 NTKERNELAPI NTSTATUS IoCreateDriver(
 	_In_		PUNICODE_STRING DriverName, OPTIONAL
@@ -22,6 +21,7 @@ NTKERNELAPI PVOID PsGetProcessSectionBaseAddress(
 	_In_		PEPROCESS Process
 );
 
+UNICODE_STRING  SymLink;
 PEPROCESS ClientProcess, TargetProcess;
 
 NTSTATUS KeReadProcessMemory(PREAD_MEMORY_PARAM Param)
@@ -30,21 +30,33 @@ NTSTATUS KeReadProcessMemory(PREAD_MEMORY_PARAM Param)
 	NTSTATUS NtStatus = STATUS_SUCCESS;
 	PVOID DriverBuffer = ExAllocatePoolWithTag(NonPagedPool, Param->Size, 'sys');
 
-	// read memory (target -> kernel)
-	KeStackAttachProcess(TargetProcess, &KapcState);
-	if (MmIsAddressValid((PVOID)Param->TargetBufferAddress))
+	__try
 	{
+		// read memory (target -> kernel)
+		KeStackAttachProcess(TargetProcess, &KapcState);
+		ProbeForRead((CONST PVOID)Param->TargetBufferAddress, Param->Size, sizeof(CHAR));
 		RtlCopyMemory(DriverBuffer, (PVOID)Param->TargetBufferAddress, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
 	}
-	KeUnstackDetachProcess(&KapcState);
-
-	// transfer buffer (kernel -> client)
-	KeStackAttachProcess(ClientProcess, &KapcState);
-	if (MmIsAddressValid((PVOID)Param->ClientBufferAddress))
+	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
-		RtlCopyMemory((PVOID)Param->ClientBufferAddress, DriverBuffer, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
+		NtStatus = STATUS_ABANDONED;
 	}
-	KeUnstackDetachProcess(&KapcState);
+	__try
+	{
+		// transfer buffer (kernel -> client)
+		KeStackAttachProcess(ClientProcess, &KapcState);
+		ProbeForRead((CONST PVOID)Param->ClientBufferAddress, Param->Size, sizeof(CHAR));
+		RtlCopyMemory((PVOID)Param->ClientBufferAddress, DriverBuffer, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		KeUnstackDetachProcess(&KapcState);
+		NtStatus = STATUS_ABANDONED;
+	}
+
 	ExFreePool(DriverBuffer);
 	return NtStatus;
 }
@@ -55,21 +67,32 @@ NTSTATUS KeWriteProcessMemory(PWRITE_MEMORY_PARAM Param)
 	NTSTATUS NtStatus = STATUS_SUCCESS;
 	PVOID DriverBuffer = ExAllocatePoolWithTag(NonPagedPool, Param->Size, 'sys');
 
-	// read memory (client -> kernel)
-	KeStackAttachProcess(ClientProcess, &KapcState);
-	if (MmIsAddressValid((PVOID)Param->ClientBufferAddress))
+	__try
 	{
+		// read memory (client -> kernel)
+		KeStackAttachProcess(ClientProcess, &KapcState);
+		ProbeForRead((CONST PVOID)Param->ClientBufferAddress, Param->Size, sizeof(CHAR));
 		RtlCopyMemory(DriverBuffer, (PVOID)Param->ClientBufferAddress, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
 	}
-	KeUnstackDetachProcess(&KapcState);
-
-	// transfer buffer (kernel -> target)
-	KeStackAttachProcess(TargetProcess, &KapcState);
-	if (MmIsAddressValid((PVOID)Param->TargetBufferAddress))
+	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
-		RtlCopyMemory((PVOID)Param->TargetBufferAddress, DriverBuffer, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
+		NtStatus = STATUS_ABANDONED;
 	}
-	KeUnstackDetachProcess(&KapcState);
+	__try
+	{
+		// transfer buffer (kernel -> target)
+		KeStackAttachProcess(TargetProcess, &KapcState);
+		ProbeForRead((CONST PVOID)Param->TargetBufferAddress, Param->Size, sizeof(CHAR));
+		RtlCopyMemory((PVOID)Param->TargetBufferAddress, DriverBuffer, Param->Size);
+		KeUnstackDetachProcess(&KapcState);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		KeUnstackDetachProcess(&KapcState);
+		NtStatus = STATUS_ABANDONED;
+	}
 
 	ExFreePool(DriverBuffer);
 	return NtStatus;
@@ -93,7 +116,7 @@ NTSTATUS DevioctlDispatch(
 		InitializeDriverParam->TargetProcessBaseAddress = (DWORD64)PsGetProcessSectionBaseAddress(TargetProcess);
 		IoSize = sizeof(INITIALIZE_DRIVER_PARAM);
 	}
-	else if(stack->Parameters.DeviceIoControl.IoControlCode == READ_MEMORY_REQUEST)
+	else if (stack->Parameters.DeviceIoControl.IoControlCode == READ_MEMORY_REQUEST)
 	{
 		//DbgPrint("[KMMM]MEMORY_READ_REQUEST");
 		PREAD_MEMORY_PARAM ReadMemoryParam = (PREAD_MEMORY_PARAM)Irp->AssociatedIrp.SystemBuffer;
@@ -136,30 +159,11 @@ NTSTATUS CloseDispatch(
 	return Irp->IoStatus.Status;
 }
 
-NTSTATUS DriverInitialize(
-	_In_  struct _DRIVER_OBJECT *DriverObject,
-	_In_  PUNICODE_STRING RegistryPath
-)
+NTSTATUS UnloadDriver(PDRIVER_OBJECT pDriverObject)
 {
-	UNREFERENCED_PARAMETER(RegistryPath);
-
-	UNICODE_STRING  SymLink, DevName;
-	PDEVICE_OBJECT  devobj;
-
-	RtlInitUnicodeString(&DevName, DEVICE_NAME);
-	RtlInitUnicodeString(&SymLink, SYMBOLIC_LINK_NAME);
-
-	IoCreateDevice(DriverObject, 0, &DevName, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, TRUE, &devobj);
-	IoCreateSymbolicLink(&SymLink, &DevName);
-	
-	devobj->Flags |= DO_BUFFERED_IO;
-
-	DriverObject->MajorFunction[IRP_MJ_CREATE] = &CreateDispatch;
-	DriverObject->MajorFunction[IRP_MJ_CLOSE] = &CloseDispatch;
-	DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = &DevioctlDispatch;
-	DriverObject->DriverUnload = NULL;
-
-	devobj->Flags &= ~DO_DEVICE_INITIALIZING;
+	UNREFERENCED_PARAMETER(pDriverObject);
+	//DbgPrint("[KMMM]UnloadDriver");
+	IoDeleteSymbolicLink(&SymLink);
 
 	return STATUS_SUCCESS;
 }
@@ -169,13 +173,22 @@ NTSTATUS DriverEntry(
 	_In_  PUNICODE_STRING RegistryPath
 )
 {
-	UNREFERENCED_PARAMETER(DriverObject);
+	//DbgPrint("[KMMM]DriverEntry");
 	UNREFERENCED_PARAMETER(RegistryPath);
 
-	UNICODE_STRING  drvName;
+	UNICODE_STRING DevName;
+	PDEVICE_OBJECT  DevObj;
 
-	RtlInitUnicodeString(&drvName, DRIVER_NAME);
-	IoCreateDriver(&drvName, &DriverInitialize);
+	RtlInitUnicodeString(&DevName, DEVICE_NAME);
+	RtlInitUnicodeString(&SymLink, SYMBOLIC_LINK_NAME);
+
+	IoCreateDevice(DriverObject, 0, &DevName, FILE_DEVICE_UNKNOWN, FILE_DEVICE_SECURE_OPEN, TRUE, &DevObj);
+	IoCreateSymbolicLink(&SymLink, &DevName);
+
+	DriverObject->MajorFunction[IRP_MJ_CREATE] = &CreateDispatch;
+	DriverObject->MajorFunction[IRP_MJ_CLOSE] = &CloseDispatch;
+	DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = &DevioctlDispatch;
+	DriverObject->DriverUnload = UnloadDriver;
 
 	return STATUS_SUCCESS;
 }
