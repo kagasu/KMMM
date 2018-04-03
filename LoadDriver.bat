@@ -1,5 +1,5 @@
 dsefix.exe
-sc create KMMM binPath="C:\Path\To\\KMMM.sys" type=kernel
+sc create KMMM binPath="C:\Path\To\KMMM.sys" type=kernel
 sc start KMMM
 timeout /t 5
 dsefix.exe -e
